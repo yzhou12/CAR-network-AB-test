@@ -2,6 +2,6 @@
 
 Code for paper "Cluster-Adaptive Network A/B Testing: FromRandomization to Estimation".
 
-Please make sure you have installed the requried R packages.
+Please install the R packages: igraph, Matrix, dplyr.
 
 The reald data "Reality Mining Network Graph" is available at http://networkrepository.com/index.php.
