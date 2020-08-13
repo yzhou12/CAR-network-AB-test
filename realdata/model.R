@@ -36,18 +36,18 @@ delta <- function(vec.x, com.group){
   # delta(ei,ej) = 1 if ci=cj
   return(com.group$membership[vec.x[1]] == com.group$membership[vec.x[2]])
 }
-DiffCal.Mah <- function(x.data, n.assign){
+DiffCal.Mah <- function(x.data, n.assign, n.working.cov){
   newdata <- x.data[1:n.assign, ]
-  subdata_A <- newdata[which(newdata$groupA == 1), 1:p.variable]
-  subdata_B <- newdata[which(newdata$groupA == 0), 1:p.variable]
+  subdata_A <- newdata[which(newdata$groupA == 1), 1:n.working.cov]
+  subdata_B <- newdata[which(newdata$groupA == 0), 1:n.working.cov]
   xbar_A <- as.matrix(colMeans(subdata_A))
   xbar_B <- as.matrix(colMeans(subdata_B))
-  temp <- as.matrix(newdata[, 1:p.variable])
   if(det(cov(temp)) == 0){
     Dc <- 0
   }
   if(det(cov(temp)) != 0){
-    Dc <- n.assign* (nrow(subdata_B)/n.assign) * (nrow(subdata_A)/n.assign) *t(xbar_A - xbar_B) %*% solve(cov(temp), tol = 1e-99) %*% (xbar_A - xbar_B)
+    Dc <- n.assign* (nrow(subdata_B)/n.assign) * (nrow(subdata_A)/n.assign) *t(xbar_A - xbar_B) 
+    %*% cov.sov %*% (xbar_A - xbar_B)
   }
   M <- Dc
   return(M)
@@ -145,6 +145,8 @@ for(l in B){
   ##################### MS #####################
   data.x <- data[, c(1:p.work, (p.variable + 1), ncol(data))]
   data <- data[order(as.numeric(rownames(data))),]
+  temp <- as.matrix(data.x[, 1: p.work])
+  cov.sov <- solve(cov(temp), tol = 1e-99)
   data <- CAR(data.x) 
   data.c$groupA <- data$groupA
   data.c$groupB <- data$groupB
