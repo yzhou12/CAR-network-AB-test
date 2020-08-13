@@ -1,7 +1,7 @@
 library(igraph)
 library(Matrix)
 library(dplyr)
-B <- 1:1000 # number of simulations
+B <- 1000 # number of simulations
 setting <- 1 # different simulation setting
 ###################### PARAMETER SETTING ######################
 N <- 500 # number of clusters
@@ -48,12 +48,12 @@ DiffCal.Mah <- function(x.data, n.assign, n.working.cov){
   subdata_B <- newdata[which(newdata$groupA == 0), 1:n.working.cov]
   xbar_A <- as.matrix(colMeans(subdata_A))
   xbar_B <- as.matrix(colMeans(subdata_B))
-  temp <- as.matrix(newdata[, 1:n.working.cov])
   if(det(cov(temp)) == 0){
     Dc <- 0
   }
   if(det(cov(temp)) != 0){
-    Dc <- n.assign* (nrow(subdata_B)/n.assign) * (nrow(subdata_A)/n.assign) *t(xbar_A - xbar_B) %*% solve(cov(temp), tol = 1e-99) %*% (xbar_A - xbar_B)
+    Dc <- n.assign* (nrow(subdata_B)/n.assign) * (nrow(subdata_A)/n.assign) *t(xbar_A - xbar_B) 
+    %*% cov.sov %*% (xbar_A - xbar_B)
   }
   M <- Dc
   return(M)
@@ -161,98 +161,111 @@ get_result <- function(method){
                            paste("c", 1:p.variable, collapse = " + ",sep = "" )," - 1, clus)")))
   alpha0.reg <- coef(est.fit)[3]
   alpha1.reg <- coef(est.fit)[4]
-  result <- c(tau1, tau2, tau3, tau4, alpha0.reg, alpha1.reg, r2, mah, r2.c)
+  result <- c(tau1, tau2, tau3, tau4, alpha0.reg, alpha1.reg, mah, r2.c)
   return(result)
 }
 ###################### END ######################
+library(parallel)
+library(doParallel)
+num.cores <- detectCores()
+c1 <- makeCluster(num.cores)
+registerDoParallel(c1)
 
-dir.create("data")
-result.om.all <- NULL
-result.crc.all <- NULL
-result.cru.all <- NULL
-for(l in B){
-  ###################### GEN DATA ######################
-  member.true <- NULL
-  for(i.com in 1:N){
-    size.com <- fun_sample_nj(k1, k2)
-    g <- watts.strogatz.game(dim=1, size = size.com, nei= sample(c(2,3,4,5),1), p= runif(1))
-    if(i.com == 1){g.all <- g}
-    if(i.com != 1){g.all <- g.all + g}
-    member.true <- c(member.true, rep(i.com, size.com))
-  }
-  nN <- length(V(g.all)) #number of nodes
-  pool <- matrix(rep(1:nN, prob.recon*nN), nrow = nN) #each column is 1:nN
-  id2 <- apply(pool, 2, fun.sample2)
-  g.all <- add_edges(g.all, as.vector(id2))
-  g.all.mat <- as_adjacency_matrix(g.all) 
-  g.all.E <- get.edgelist(g.all)
-  group.true <- make_clusters(g.all, membership = member.true)
-  data.group.true <- data.frame(label = as.numeric(V(g.all)), cluster= group.true$membership)
-  length.comm.true <- max(data.group.true$cluster)
-  info.all.true <- NULL
-  for(i in 1:length.comm.true){
-    Vset.i <- data.group.true[data.group.true$cluster==i,]$label
-    set.id <- which((g.all.E[,1] %in% Vset.i) |(g.all.E[,2] %in% Vset.i))
-    if(length(set.id) != 1){Eset.i <- g.all.E[set.id,]}
-    if(length(set.id) == 1){Eset.i <- t(g.all.E[set.id,])}
-    edge.bew <- apply(Eset.i, 1, delta, com.group = group.true)
-    badlink <- sum(!edge.bew)
-    sub.i <- subgraph(g.all, Vset.i)
-    info <- c(nN = length(V(sub.i)), nE = length(E(sub.i)), avgD = mean(degree(sub.i)), maxD = max(degree(sub.i)), 
-              denE = edge_density(sub.i), tran = transitivity(sub.i), badE = badlink, nCC = count_components(sub.i))
-    info.all.true <- rbind(info.all.true, info)
-  }
-  rownames(info.all.true) <- 1:length.comm.true
-  table.info.true <- info.all.true 
-  data <- as.data.frame(scale(table.info.true[, set.feature]))
-  colnames(data) <- paste("c", 1:p.variable, sep = "")
-  data$groupA <- 0
-  data$groupB <- 0
-  ##################### MS #####################
-  data.x <- data[, c(1:p.work, (p.variable + 1), ncol(data))]
-  data <- CAR(data.x) 
-  data.c$groupA <- data$groupA
-  data.c$groupB <- data$groupB
-  data.n <- left_join(data.group.true, data.c, by = "cluster")
-  data.n <- data.n[,c(3:(3 + p.variable + 1),2)] 
-  result.om <- get_result("OM")
-  ###################### END ######################
-  
-  ##################### CRC #####################
-  data$groupA <- 0
-  data$groupB <- 0
-  id <- sample(1:nrow(data), nrow(data)/2 , replace = F)
-  data[id,]$groupA <- 1
-  data$groupB <- 1- data$groupA
-  data.c$groupA <- data$groupA
-  data.c$groupB <- data$groupB
-  data.n <- left_join(data.group.true, data.c, by = "cluster")
-  data.n <- data.n[,c(3:(3 + p.variable + 1),2)] # \bXi, groupA, groupB, cluster 
-  result.crc <- get_result("CRC")
-  ###################### END ######################
-  
-  ##################### CRU #####################
-  data.n$groupA <- 0 
-  data.n$groupB <- 0
-  Nnode <- nrow(data.n)
-  if(Nnode %% 2 == 0){
-    groupA.node <- sample(1:Nnode, Nnode/2, replace = F)
-  }
-  if(Nnode %% 2 == 1){  #odd number of clusters
-    random <- sample(c(0,1), 1)
-    if(random == 1){
-      groupA.node <- sample(1:Nnode, (Nnode-1)/2, replace = F)}
-    if(random == 0){
-      groupA.node <- sample(1:Nnode, (Nnode+1)/2, replace = F)}
-  }
-  data.n$groupA[groupA.node] <- 1
-  data.n$groupB <- 1 - data.n$groupA
-  data.c$groupA <- 0
-  data.c$groupB <- 0
-  result.cru <- get_result("CRU")
-  ###################### END ######################
-  result.om.all <- rbind(result.om.all, result.om)
-  result.crc.all <- rbind(result.crc.all, result.crc)
-  result.cru.all <- rbind(result.cru.all, result.cru)
-  save(result.om.all, result.crc.all, result.cru.all, file = paste0("data/tau_s", setting, ".RData"))
-}
+elapsed.time <- system.time({
+  result <- foreach(i =  1:B, .combine = rbind, .packages = c("dplyr", "igraph", "Matrix")) %dopar% {
+    ###################### GEN DATA ######################
+    member.true <- NULL
+    for(i.com in 1:N){
+      size.com <- fun_sample_nj(k1, k2)
+      g <- watts.strogatz.game(dim=1, size = size.com, nei= sample(c(2,3,4,5),1), p= runif(1))
+      if(i.com == 1){g.all <- g}
+      if(i.com != 1){g.all <- g.all + g}
+      member.true <- c(member.true, rep(i.com, size.com))
+    }
+    nN <- length(V(g.all)) #number of nodes
+    pool <- matrix(rep(1:nN, prob.recon*nN), nrow = nN) #each column is 1:nN
+    id2 <- apply(pool, 2, fun.sample2)
+    g.all <- add_edges(g.all, as.vector(id2))
+    g.all.mat <- as_adjacency_matrix(g.all) 
+    g.all.E <- get.edgelist(g.all)
+    group.true <- make_clusters(g.all, membership = member.true)
+    data.group.true <- data.frame(label = as.numeric(V(g.all)), cluster= group.true$membership)
+    length.comm.true <- max(data.group.true$cluster)
+    info.all.true <- NULL
+    for(i in 1:length.comm.true){
+      Vset.i <- data.group.true[data.group.true$cluster==i,]$label
+      set.id <- which((g.all.E[,1] %in% Vset.i) |(g.all.E[,2] %in% Vset.i))
+      if(length(set.id) != 1){Eset.i <- g.all.E[set.id,]}
+      if(length(set.id) == 1){Eset.i <- t(g.all.E[set.id,])}
+      edge.bew <- apply(Eset.i, 1, delta, com.group = group.true)
+      badlink <- sum(!edge.bew)
+      sub.i <- subgraph(g.all, Vset.i)
+      info <- c(nN = length(V(sub.i)), nE = length(E(sub.i)), avgD = mean(degree(sub.i)), maxD = max(degree(sub.i)), 
+                denE = edge_density(sub.i), tran = transitivity(sub.i), badE = badlink, nCC = count_components(sub.i))
+      info.all.true <- rbind(info.all.true, info)
+    }
+    rownames(info.all.true) <- 1:length.comm.true
+    table.info.true <- info.all.true 
+    data <- as.data.frame(scale(table.info.true[, set.feature]))
+    colnames(data) <- paste("c", 1:p.variable, sep = "")
+    data$groupA <- 0
+    data$groupB <- 0
+    data.c <- data
+    data.c$cluster <- as.numeric(row.names(data))
+    ##################### MS #####################
+    data.x <- data[, c(1:p.work, (p.variable + 1), ncol(data))]
+    temp <- as.matrix(data.x[, 1: p.work])
+    cov.sov <- solve(cov(temp), tol = 1e-99)
+    data <- CAR(data.x) 
+    data.c$groupA <- data$groupA
+    data.c$groupB <- data$groupB
+    data.n <- left_join(data.group.true, data.c, by = "cluster")
+    data.n <- data.n[,c(3:(3 + p.variable + 1),2)] 
+    result.om <- get_result("OM")
+    ###################### END ######################
+    
+    ##################### CRC #####################
+    data$groupA <- 0
+    data$groupB <- 0
+    id <- sample(1:nrow(data), nrow(data)/2 , replace = F)
+    data[id,]$groupA <- 1
+    data$groupB <- 1- data$groupA
+    data.c$groupA <- data$groupA
+    data.c$groupB <- data$groupB
+    data.n <- left_join(data.group.true, data.c, by = "cluster")
+    data.n <- data.n[,c(3:(3 + p.variable + 1),2)] # \bXi, groupA, groupB, cluster 
+    result.crc <- get_result("CRC")
+    ###################### END ######################
+    
+    ##################### CRU #####################
+    data.n$groupA <- 0 
+    data.n$groupB <- 0
+    Nnode <- nrow(data.n)
+    if(Nnode %% 2 == 0){
+      groupA.node <- sample(1:Nnode, Nnode/2, replace = F)
+    }
+    if(Nnode %% 2 == 1){  #odd number of clusters
+      random <- sample(c(0,1), 1)
+      if(random == 1){
+        groupA.node <- sample(1:Nnode, (Nnode-1)/2, replace = F)}
+      if(random == 0){
+        groupA.node <- sample(1:Nnode, (Nnode+1)/2, replace = F)}
+    }
+    data.n$groupA[groupA.node] <- 1
+    data.n$groupB <- 1 - data.n$groupA
+    data.c$groupA <- 0
+    data.c$groupB <- 0
+    result.cru <- get_result("CRU")
+    ###################### END ######################
+    out <- c(result.om, result.crc, result.cru)
+    names(out) <- c("tauvu.om", "taucu.om", "tauva.om", "tauca.om", "alpha0.om", "alpha1.om", "mah.om", "r2.om",
+                    "tauvu.crc", "taucu.crc", "tauva.crc", "tauca.crc", "alpha0.crc", "alpha1.crc", "mah.crc", "r2.crc",
+                    "tauvu.cru", "taucu.cru", "tauva.cru", "tauca.cru", "alpha0.cru", "alpha1.cru", "mah.cru", "r2.cru")
+    out
+    } })[3]
+stopCluster(c1)
+
+elapsed.time
+
+save(result, file = paste0("result_s", setting, ".RData"))
+
